@@ -17,16 +17,35 @@ def init(model: torch.nn.Module, criterion: torch.nn.Module = None, **kwargs):
 
 
 class DCFramework:
-    def __init__(self, model: torch.nn.Module, criterion: torch.nn.Module, lr=1e-3, epochs=1):
+    def __init__(
+            self,
+            model: torch.nn.Module,
+            criterion: torch.nn.Module,
+            lr=1e-3,
+            epochs=1,
+    ):
         self.model = model
         self.optimizer = torch.optim.SGD(model.parameters(), lr=lr)
         self.criterion = criterion
         self.epochs = epochs
+        self.distributed = False
 
-        if torch.cuda.is_available():
-            self.device = torch.device("cuda")
-        else:
+        count_available_gpus = torch.cuda.device_count()
+        if count_available_gpus == 0:
             self.device = torch.device("cpu")
+        elif count_available_gpus == 1:
+            self.device = torch.device("cuda:0")
+        else:
+            self.distributed = True
+            torch.distributed.init_process_group(
+                "nccl",
+                world_size=count_available_gpus,
+            )
+            self.local_rank = torch.distributed.get_rank()
+            self.device = torch.device(f"cuda:{self.local_rank}")
+            self.model.to(self.device)
+            self.model = torch.nn.parallel.DistributedDataParallel(self.model)
+            self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
 
     def forward(self, feature, target=None):
         try:
@@ -49,13 +68,13 @@ class DCFramework:
         }
 
     def train(self, train_data: Dict[str, np.array], validation_data: Dict[str, np.array] = None,  batch_size: int = 1):
-        train_data = Dataset(train_data)
+        train_data = Dataset(train_data, distributed=self.distributed)
         train_dataloader = train_data.get_dataloader(batch_size=batch_size)
 
         perform_validation = False
         if validation_data:
             perform_validation = True
-            validation_data = Dataset(validation_data)
+            validation_data = Dataset(validation_data, distributed=self.distributed)
             validation_dataloader = validation_data.get_dataloader(batch_size=batch_size)
 
         # We'll store a number of quantities such as training and validation loss,

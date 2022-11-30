@@ -1,12 +1,14 @@
 import torch
+from torch.utils.data.distributed import DistributedSampler
 
 
 class Dataset:
-    def __init__(self, data, dtype=torch.float32):
+    def __init__(self, data, dtype=torch.float32, distributed=False):
         self._data = {
             "feature": torch.from_numpy(data["feature"]).to(dtype),
             "target": torch.from_numpy(data["target"]).to(dtype),
         }
+        self.distributed = distributed
 
         if self._data["target"].dim() == 1:
             self._data["target"] = self._data["target"].unsqueeze(1)
@@ -18,8 +20,15 @@ class Dataset:
         return self._data["feature"].size(0)
 
     def get_dataloader(self, batch_size):
+        sampler = None
+        if self.distributed:
+            sampler = DistributedSampler(self)
+
         train_dataloader = torch.utils.data.DataLoader(
-            self, batch_size=batch_size, collate_fn=self.default_collate_fn
+            self,
+            batch_size=batch_size,
+            sampler=sampler,
+            collate_fn=self.default_collate_fn,
         )
         return train_dataloader
 
